@@ -1,0 +1,42 @@
+# ---- software build products ----
+sw/*.elf
+sw/*.bin
+sw/*.lst
+sw/*.map
+sw/*.o
+
+# NOTE: sw/*.hex is intentionally NOT ignored. Checking in the memory
+# images means anyone can synthesize the design without installing a
+# RISC-V toolchain first.
+
+# ---- simulation ----
+sim/work/
+sim/*.out
+sim/*.vcd
+sim/*.hex
+
+# ---- Vivado ----
+build/
+*.jou
+*.log
+*.str
+*.dcp
+*.bit
+*.bin
+*.ltx
+.Xil/
+vivado*.backup*
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.srcs/
+*.gen/
+*.xpr
+
+# ---- editors / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store

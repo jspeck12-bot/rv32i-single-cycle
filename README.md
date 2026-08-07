@@ -18,9 +18,9 @@ Implements the **full RV32I base integer ISA** — 37 instructions — excluding
 | gcc `-march=rv32i -mabi=ilp32` C program | runs correctly in RTL simulation |
 | Yosys structural check | pass, no driverless or multiply-driven nets |
 | Inferred latches | **0** |
-| Artix-7 technology mapping | ~1000 LUT, 85 FF, 128 RAM256X1S, 12 RAM32M |
-| Vivado timing closure | *not yet run* — `scripts/build_vivado.tcl` |
-| Hardware bring-up on Basys 3 | *not yet run* |
+| Vivado implementation | 1,528 LUT (7.35%), 560 LUTRAM, 88 FF |
+| Timing closure | WNS +64.608 ns on cpu_clk; critical path 15.39 ns, Fmax ~65 MHz |
+| Hardware bring-up on Basys 3 | verified — gcc-compiled C executing, fib(23) = 0x6FF1 |
 
 Utilization is roughly 5% of the XC7A35T's 20,800 LUTs. Note that the
 instruction ROM constant-folds against whatever program image is loaded, so

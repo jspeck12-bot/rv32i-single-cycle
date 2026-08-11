@@ -19,15 +19,14 @@ Implements the **full RV32I base integer ISA** — 37 instructions — excluding
 | Yosys structural check | pass, no driverless or multiply-driven nets |
 | Inferred latches | **0** |
 | Vivado implementation | 1,528 LUT (7.35%), 560 LUTRAM, 88 FF |
-| Timing closure | WNS +64.608 ns on cpu_clk; critical path 15.39 ns, Fmax ~65 MHz |
-| Hardware bring-up on Basys 3 | verified — gcc-compiled C executing, fib(23) = 0x6FF1 |
+| Timing closure | WNS +64.608 ns on `cpu_clk`, 0 failing endpoints / 5,878; critical path 15.39 ns → Fmax ~65 MHz |
+| Hardware bring-up on Basys 3 | **verified** — gcc-compiled C executing, fib(23) = `0x6FF1` |
 
 Utilization is roughly 5% of the XC7A35T's 20,800 LUTs. Note that the
 instruction ROM constant-folds against whatever program image is loaded, so
 LUT count grows with program size — the number above is for `sw/main.c`.
 
-Everything above the horizontal break is reproducible with `./scripts/run_sim.sh`
-and `./scripts/lint_yosys.sh`. The last two rows require Vivado and the board.
+
 
 ---
 

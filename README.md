@@ -122,8 +122,8 @@ entire fetch→decode→read→execute→memory→writeback path.
 
 | Range | Device | Notes |
 |---|---|---|
-| `0x0000_0000 – 0x0000_0FFF` | Instruction ROM | 4 KB, initialized from `imem.hex` |
-| `0x1000_0000 – 0x1000_0FFF` | Data RAM | 4 KB, byte-enabled, from `dmem.hex` |
+| `0x0000_0000 – 0x0000_0FFF` | Instruction ROM | 4 KB, initialized from `imem.mem` |
+| `0x1000_0000 – 0x1000_0FFF` | Data RAM | 4 KB, byte-enabled, from `dmem.mem` |
 | `0x2000_0000` | LED register | write, low 16 bits |
 | `0x2000_0004` | Switch input | read, low 16 bits |
 | `0x2000_0008` | 7-segment value | write, low 16 bits |
@@ -164,7 +164,7 @@ sw/           software
   crt0.S        reset vector, stack setup, .bss clear
   main.c        demo: Fibonacci table, switches select, hex display out
   test.S        34-case ISA self-test
-  Makefile      builds imem.hex / dmem.hex
+  Makefile      builds imem.mem / dmem.mem
 
 tools/        bin2hex.py -- flat binary to $readmemh word list
 constr/       Basys3.xdc
@@ -182,7 +182,7 @@ scripts/
 
 ### 1. Prerequisites
 
-**To synthesize and run on hardware you need only Vivado.** `sw/imem.hex` and
+**To synthesize and run on hardware you need only Vivado.** `sw/imem.mem` and
 `sw/dmem.hex` are committed, so the FPGA build has everything it needs.
 
 Optional, and only if you want to change the software or re-run verification:

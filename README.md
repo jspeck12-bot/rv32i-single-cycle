@@ -1,7 +1,12 @@
 # Single-Cycle RV32I CPU on the Basys 3
 
+![RV32I CPU running gcc-compiled C on a Basys 3](docs/rv32i_demo.gif)
+
+*Switches select an index into a Fibonacci table computed in C; the
+7-segment display shows the value. `6FF1` = fib(23) = 28,657.*
+
 A synthesizable single-cycle RISC-V processor written from scratch in Verilog-2001,
-running C compiled by `riscv32-unknown-elf-gcc` on a Digilent Basys 3
+running C compiled by RISC-V GCC (`-march=rv32i -mabi=ilp32`) on a Digilent Basys 3
 (Xilinx Artix-7 XC7A35T).
 
 Implements the **full RV32I base integer ISA** — 37 instructions — excluding

@@ -1,323 +1,193 @@
-# Single-Cycle RV32I CPU on the Basys 3
+# rv32i-single-cycle
 
-![RV32I CPU running gcc-compiled C on a Basys 3](docs/rv32i_demo.gif)
+A complete 37-instruction RV32I single-cycle processor in Verilog, synthesized and verified on hardware on a Digilent Basys 3 (Xilinx Artix-7 XC7A35T).
 
-*Switches select an index into a Fibonacci table computed in C; the
-7-segment display shows the value. `6FF1` = fib(23) = 28,657.*
-
-A synthesizable single-cycle RISC-V processor written from scratch in Verilog-2001,
-running C compiled by RISC-V GCC (`-march=rv32i -mabi=ilp32`) on a Digilent Basys 3
-(Xilinx Artix-7 XC7A35T).
-
-Implements the **full RV32I base integer ISA** — 37 instructions — excluding
-`FENCE`, `ECALL`, `EBREAK`, and the Zicsr CSR extension.
+**Status: complete.** Timing closed, hardware bring-up done, demo captured. Tagged `v1.0` with bitstream.
 
 ---
 
-## Status
+## Results
 
-| Check | Result |
+### Post-synthesis utilization (Vivado 2024.2)
+
+| Resource | Used | Available | Utilization |
+|---|---|---|---|
+| LUT | 1,528 | 20,800 | 7.35% |
+| LUTRAM | 560 | 9,600 | 5.83% |
+| FF | 88 | 41,600 | 0.21% |
+| IO | 46 | 106 | 43.4% |
+| BUFG | 2 | 32 | 6.25% |
+
+### Timing
+
+| Metric | Value |
 |---|---|
-| ALU directed unit test | 16/16 pass |
-| ISA self-test (`sw/test.S`) | 34/34 sub-tests pass, 185 cycles |
-| gcc `-march=rv32i -mabi=ilp32` C program | runs correctly in RTL simulation |
-| Yosys structural check | pass, no driverless or multiply-driven nets |
-| Inferred latches | **0** |
-| Vivado implementation | 1,528 LUT (7.35%), 560 LUTRAM, 88 FF |
-| Timing closure | WNS +64.608 ns on `cpu_clk`, 0 failing endpoints / 5,878; critical path 15.39 ns → Fmax ~65 MHz |
-| Hardware bring-up on Basys 3 | **verified** — gcc-compiled C executing, fib(23) = `0x6FF1` |
+| Constrained period (`cpu_clk`) | 80.000 ns |
+| Worst negative slack (setup) | +64.608 ns |
+| Critical path | 15.39 ns |
+| Implied Fmax | ~65 MHz |
+| Failing endpoints | 0 of 5,878 |
+| Operating frequency | 12.5 MHz (100 MHz ÷ 8 via BUFG) |
 
-Utilization is roughly 5% of the XC7A35T's 20,800 LUTs. Note that the
-instruction ROM constant-folds against whatever program image is loaded, so
-LUT count grows with program size — the number above is for `sw/main.c`.
+The core is clocked well below its Fmax. The 80 ns constraint was chosen to give margin during bring-up, not because the design required it.
 
+### Verification
 
+| Test | Coverage | Result |
+|---|---|---|
+| `test.S` ISA test | 34 self-checking cases, 185 cycles | Pass |
+| ALU unit test | 16 cases | Pass |
+| Yosys lint | Full RTL | 0 inferred latches |
+| Hardware demo | `fib(23)` = `0x6FF1` on 7-segment | Confirmed (video in repo) |
 
 ---
 
-## Architecture
+## Note on tool numbers
 
-```mermaid
-flowchart LR
-    PC[PC register] --> IMEM[Instruction ROM<br/>4 KB]
-    IMEM -->|instr| CTRL[Control unit<br/>main + ALU decoder]
-    IMEM -->|rs1 rs2 rd| RF[Register file<br/>32 x 32<br/>2R async / 1W sync]
-    IMEM -->|imm fields| EXT[Immediate<br/>generator]
+Two toolchains report area, and they do not agree. Both figures appear in this repo, so they are labeled explicitly:
 
-    RF -->|rd1| MUXA{{ALU src A<br/>rs1 / PC / 0}}
-    RF -->|rd2| MUXB{{ALU src B<br/>rs2 / imm}}
-    PC --> MUXA
-    EXT --> MUXB
+- **Yosys** (generic synthesis, used for linting): roughly 1,000 cells and 85 FF. This is a technology-independent estimate, not a mapping to the Artix-7 fabric.
+- **Vivado 2024.2** (post-synthesis, XC7A35T): 1,528 LUT and 88 FF. **These are the real numbers** — they reflect actual mapping to 6-input LUTs and the LUTRAM used for the register file and memories.
 
-    MUXA --> ALU[ALU]
-    MUXB --> ALU
-
-    RF --> BR[Branch<br/>comparator]
-    BR -->|take| CTRL
-
-    ALU -->|address| LSU[Load / store unit<br/>byte enables + extend]
-    RF -->|rd2 store data| LSU
-    LSU <--> DMEM[Data RAM<br/>4 KB<br/>byte-enabled]
-    LSU --> MUXW
-
-    ALU --> MUXW{{Writeback mux<br/>ALU / mem / PC+4}}
-    PC --> MUXW
-    MUXW -->|rd| RF
-
-    CTRL -->|pc_src| PCMUX{{Next PC<br/>PC+4 / PC+imm / rs1+imm}}
-    ALU --> PCMUX
-    EXT --> PCMUX
-    PCMUX --> PC
-```
-
-One instruction retires per clock. There is no pipeline, so there are no
-hazards, no forwarding, and no stalls — and the clock period has to cover the
-entire fetch→decode→read→execute→memory→writeback path.
-
-### Design decisions worth defending
-
-- **Asynchronous-read memories.** A single-cycle machine cannot tolerate a
-  registered memory read, so `imem` and `dmem` use combinational reads. On the
-  Artix-7 this maps to LUT-based ROM and distributed RAM (LUTRAM), not block
-  RAM. This is the real cost of the single-cycle architecture and it is why
-  memories are capped at 4 KB each.
-- **Dedicated branch comparator.** Branches are resolved by `branch_unit.v`
-  reading the register file directly rather than by reusing the ALU's zero
-  flag. It costs one extra comparator and buys a shorter control path plus
-  free `BLT`/`BGE`/`BLTU`/`BGEU`.
-- **LUI via the ALU.** `LUI` is `0 + U-immediate`, so it reuses the adder
-  through a third input on the ALU-A mux instead of needing its own path.
-- **Separate load/store alignment unit.** `lsu.v` produces byte-enables for
-  `SB`/`SH` and does lane selection plus sign/zero extension for
-  `LB`/`LH`/`LBU`/`LHU`. Keeping it out of the core makes the datapath
-  readable.
-- **Divided CPU clock with a declared generated clock.** The board gives
-  100 MHz; the CPU runs at 12.5 MHz off a BUFG, and `constr/Basys3.xdc`
-  declares that generated clock so timing is analysed against the real 80 ns
-  period.
+The gap is expected. Yosys counts abstract gates; Vivado counts what physically lands on the device. Cite the Vivado numbers.
 
 ---
 
 ## Instruction set
 
-| Format | Instructions |
-|---|---|
-| R-type | `ADD` `SUB` `SLL` `SLT` `SLTU` `XOR` `SRL` `SRA` `OR` `AND` |
-| I-type ALU | `ADDI` `SLTI` `SLTIU` `XORI` `ORI` `ANDI` `SLLI` `SRLI` `SRAI` |
-| Load | `LB` `LH` `LW` `LBU` `LHU` |
-| Store | `SB` `SH` `SW` |
-| Branch | `BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU` |
-| Jump | `JAL` `JALR` |
-| Upper immediate | `LUI` `AUIPC` |
+All 37 instructions of the RV32I base integer ISA:
 
-> **Why not the ten-instruction subset most tutorials stop at?** Because a
-> compiler will not cooperate. `riscv32-unknown-elf-gcc` emits `LUI`, `AUIPC`,
-> `JALR`, `BNE`, `BGEU`, `SLLI`, `SRAI`, `SB`, and `LBU` in the first twenty
-> instructions of any C program. Running real compiled code requires the whole
-> base ISA.
+- **Arithmetic/logic (register):** `ADD` `SUB` `SLL` `SLT` `SLTU` `XOR` `SRL` `SRA` `OR` `AND`
+- **Arithmetic/logic (immediate):** `ADDI` `SLTI` `SLTIU` `XORI` `ORI` `ANDI` `SLLI` `SRLI` `SRAI`
+- **Loads:** `LB` `LH` `LW` `LBU` `LHU`
+- **Stores:** `SB` `SH` `SW`
+- **Branches:** `BEQ` `BNE` `BLT` `BGE` `BLTU` `BGEU`
+- **Jumps:** `JAL` `JALR`
+- **Upper immediate:** `LUI` `AUIPC`
 
----
+**Not implemented:** `FENCE`, `ECALL`, `EBREAK`, and the Zicsr extension. These are not needed to run compiled C on bare metal without an OS or trap handler.
 
-## Memory map
+### Why 37 and not 10
 
-| Range | Device | Notes |
-|---|---|---|
-| `0x0000_0000 – 0x0000_0FFF` | Instruction ROM | 4 KB, initialized from `imem.mem` |
-| `0x1000_0000 – 0x1000_0FFF` | Data RAM | 4 KB, byte-enabled, from `dmem.mem` |
-| `0x2000_0000` | LED register | write, low 16 bits |
-| `0x2000_0004` | Switch input | read, low 16 bits |
-| `0x2000_0008` | 7-segment value | write, low 16 bits |
+Most tutorial cores implement a 10-instruction subset. That subset cannot run compiled code. Disassembling gcc output for any trivial C program shows `LUI`, `AUIPC`, `JALR`, `BGEU`, `SLLI`, and `SRAI` appearing within the first 20 instructions — stack setup and the calling convention require them before `main` is even reached.
 
-Reset PC is `0x0000_0000`. The stack pointer starts at `0x1000_1000` and grows
-down. `.text` lives in ROM; `.rodata`, `.data`, `.bss`, and the stack live in
-RAM.
+The instruction set was scoped from the requirement backwards: the target was "runs a C program compiled by the standard toolchain," and that requirement dictated 37 instructions.
 
 ---
 
-## Repository layout
+## Architecture
+
+15 RTL files, 956 lines of Verilog.
 
 ```
-rtl/          Verilog source
-  rv32i_defs.vh    shared opcode / control encodings
-  alu.v            32-bit ALU
-  alu_decoder.v    funct3 + funct7[5] -> ALU control
-  main_decoder.v   opcode -> control signals
-  controller.v     control unit (both decoders + next-PC select)
-  regfile.v        32 x 32 register file
-  extend.v         immediate generator (I S B U J)
-  branch_unit.v    branch condition comparator
-  lsu.v            load/store alignment and byte enables
-  imem.v           instruction ROM
-  dmem.v           data RAM with byte write enables
-  riscv_core.v     datapath + control  <- the CPU
-  riscv_soc.v      core + memories + memory-mapped I/O
-  seg7.v           4-digit hex display driver
-  top_basys3.v     board wrapper (clocking, reset, pins)
+rtl/
+  rv32i_defs.vh      opcode, funct3, funct7, and ALU control constants
+  riscv_soc.v        top-level SoC: core + imem + dmem + MMIO
+  riscv_core.v       datapath and control integration
+  controller.v       control unit wrapper
+  main_decoder.v     opcode -> control signals
+  alu_decoder.v      funct3/funct7 -> ALU operation
+  alu.v              arithmetic, logic, shifts, comparisons
+  regfile.v          32x32 register file, x0 hardwired to zero
+  extend.v           I/S/B/U/J immediate generation
+  branch_unit.v      dedicated branch comparator
+  lsu.v              load/store alignment, byte enables, sign/zero extension
+  imem.v             instruction memory (4 KB, async read)
+  dmem.v             data memory (4 KB, async read)
+  seg7.v             7-segment display driver
+  top_basys3.v       board top level, clock divider, pin mapping
+```
 
-sim/          testbenches
-  tb_alu.v              directed ALU unit test
-  tb_riscv_soc.v        runs sw/test.S, self-checking
-  tb_riscv_soc_prog.v   runs the gcc-compiled C demo
+### Design decisions
 
-sw/           software
-  link.ld       memory layout
-  crt0.S        reset vector, stack setup, .bss clear
-  main.c        demo: Fibonacci table, switches select, hex display out
-  test.S        34-case ISA self-test
-  Makefile      builds imem.mem / dmem.mem
+**Asynchronous-read LUT-based memories.** A single-cycle design must fetch an instruction and complete a data access within one clock period. Block RAM on Artix-7 has a registered read, which would force a second cycle. Distributed LUTRAM gives combinational reads at the cost of capacity — each memory is capped at 4 KB. This is the constraint that makes single-cycle possible on this device, and it is the first thing a pipelined version would change.
 
-tools/        bin2hex.py -- flat binary to $readmemh word list
-constr/       Basys3.xdc
-scripts/
-  find_toolchain.sh locate and verify a usable RISC-V GCC
-  run_sim.sh        build software, run every testbench
-  lint_yosys.sh     latch check + Artix-7 mapping estimate
-  build_vivado.tcl  non-project synthesis -> bitstream
-  publish.sh        first push to GitHub
+**Dedicated branch comparator.** Branch conditions are evaluated by a separate unit fed directly from the register file rather than by reusing the ALU's zero flag. Reusing the ALU would serialize the subtract and the branch decision into the same critical path. Separating them costs a small amount of area and buys timing margin.
+
+**LUI through a third ALU-A mux input.** `LUI` needs to produce `0 + immediate`. Rather than adding a special-case path, a third input to the ALU operand-A mux supplies a hardwired zero, and `LUI` reuses the existing adder. One mux input instead of a dedicated datapath.
+
+**Standalone load/store unit.** Byte enables, sub-word alignment, and sign versus zero extension for `LB`/`LH`/`LBU`/`LHU` are handled in one module rather than scattered across the datapath. Keeps the memory interface in a single place.
+
+---
+
+## Software flow
+
+```
+sw/
+  link.ld            linker script: memory map and section placement
+  crt0.S             startup: stack pointer init, jump to main
+  main.c             C test program (Fibonacci)
+  test.S             34-case self-checking ISA test
+  Makefile           build flow with toolchain auto-detect
+tools/
+  bin2hex.py         ELF/binary -> Verilog $readmemh .mem format
+```
+
+Requires the RISC-V GNU toolchain (`riscv32-unknown-elf-gcc`). The Makefile auto-detects common install paths and prefixes.
+
+```
+make            # build main.c -> program.mem
+make test       # build the ISA test
 ```
 
 ---
 
 ## Build and run
 
-### 1. Prerequisites
-
-**To synthesize and run on hardware you need only Vivado.** `sw/imem.mem` and
-`sw/dmem.hex` are committed, so the FPGA build has everything it needs.
-
-Optional, and only if you want to change the software or re-run verification:
-
-| Tool | Needed for |
-|---|---|
-| RISC-V GCC | rebuilding `imem.hex` / `dmem.hex` from `main.c` |
-| Icarus Verilog (`iverilog`) | running the testbenches |
-| Yosys | the pre-synthesis latch/mapping lint |
-| Python 3 | `tools/bin2hex.py` |
-
-### Getting a RISC-V toolchain
-
-RISC-V GCC ships under several different names depending on who built it.
-`./scripts/find_toolchain.sh` scans your PATH, test-compiles for
-`rv32i`/`ilp32`, and tells you which prefix works. `sw/Makefile` auto-detects
-it too, so `make` usually just works.
-
-| Prefix | Where it comes from |
-|---|---|
-| `riscv64-unknown-elf-` | Ubuntu/Debian `apt`, riscv-gnu-toolchain |
-| `riscv32-unknown-elf-` | riscv-gnu-toolchain built for 32-bit |
-| `riscv-none-elf-` | xPack GNU RISC-V Embedded GCC |
-| `riscv64-elf-` | Homebrew, Arch Linux |
-
-**Ubuntu / Debian / WSL** — one command, this is the easy path:
-
-```bash
-sudo apt update && sudo apt install -y gcc-riscv64-unknown-elf
-```
-
-**Windows, native (no WSL)** — xPack ships a prebuilt zip. Download the latest
-`riscv-none-elf-gcc-*-win32-x64.zip` from
-<https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases>,
-extract to `C:\riscv`, and add `C:\riscv\bin` to your PATH. The prefix is
-`riscv-none-elf-`.
-
-**macOS**
-
-```bash
-brew tap riscv-software-src/riscv
-brew install riscv-tools          # prefix: riscv64-unknown-elf-
-```
-
-Verify with `./scripts/find_toolchain.sh` or `make -C sw toolchain`.
-
-- Vivado 2024.2 for synthesis and the bitstream.
-
-### 2. Build the software
-
-Only needed if you changed `main.c` or `test.S` — the `.hex` files are
-already in the repo.
-
-```bash
-cd sw
-make toolchain            # show which compiler was auto-detected
-make                      # -> imem.hex, dmem.hex, prog.lst
-make test                 # -> imem_test.hex, dmem_test.hex
-make CROSS=riscv-none-elf- all    # override the prefix if auto-detect misses
-```
-
-### 3. Simulate and lint
-
-```bash
-./scripts/run_sim.sh          # all three testbenches
-./scripts/lint_yosys.sh       # latch check + Artix-7 mapping estimate
-```
-
-Expected output:
+### Simulation
 
 ```
---- alu unit test ---
-  alu: all cases passed
-
- single-cycle RV32I -- ISA self-test
-  ALL TESTS PASSED   (185 cycles)
-
- single-cycle RV32I -- running gcc-compiled C
-  Fibonacci table in RAM matches (24 entries)
-  ok:   sw=23  hex=6ff1  (fib[23])
-  C PROGRAM RAN CORRECTLY
+iverilog -o sim.out -I rtl rtl/*.v tb/tb_riscv_soc.v
+vvp sim.out
+gtkwave dump.vcd
 ```
 
-Add `+TRACE` to `vvp` for an instruction-by-instruction trace, or `+VCD` to
-dump waveforms for GTKWave.
+### Lint
 
-### 4. Synthesize and program
-
-```bash
-vivado -mode batch -source scripts/build_vivado.tcl
+```
+yosys -p "read_verilog -I rtl rtl/*.v; hierarchy -top riscv_soc; proc; check"
 ```
 
-Then open Vivado's Hardware Manager, connect to the Basys 3, and program
-`build/top_basys3.bit`.
+### Vivado
 
-**Check `build/post_route_timing.rpt` before trusting the bitstream.** If WNS
-is negative, lower the CPU clock by widening the divider in `top_basys3.v` and
-updating `-divide_by` in the XDC to match.
+1. Create a project targeting **xc7a35tcpg236-1**.
+2. Add all files from `rtl/` as design sources.
+3. Add `constraints/top_basys3.xdc`.
+4. Add the generated `.mem` file as a design source.
+5. Run synthesis, implementation, and generate bitstream.
 
-### On the board
+### Prebuilt bitstream
 
-- `btnC` resets the CPU.
-- Switches `sw[4:0]` select a Fibonacci index (0–23).
-- The 7-segment display shows the low 16 bits of that value.
-- The LEDs show the high 16 bits.
+`top_basys3.bit` is included in the `v1.0` release. Program it directly with the Vivado Hardware Manager — no build required.
 
 ---
 
-## Known limitations
+## Two things that cost me time
 
-These are deliberate and documented, not oversights.
+### `$readmemh` fails silently in Vivado
 
-- **No pipeline.** Single-cycle by design. CPI is exactly 1, but the clock
-  period is set by the slowest instruction — a load — so IPC/MHz is poor. A
-  5-stage pipeline is the obvious next step.
-- **No `FENCE`, `ECALL`, `EBREAK`, or CSRs.** No exceptions, no interrupts, no
-  privilege modes. `illegal_instr` is exported from the core as a debug flag
-  but does not trap.
-- **No misaligned-access trap.** A misaligned `LW` silently reads the
-  containing word instead of raising an exception.
-- **No multiply/divide.** `-march=rv32i` only; C code that multiplies will pull
-  `__mulsi3` from libgcc, which works but is slow.
-- **LUT-based memories.** 4 KB each. Using block RAM would require registered
-  reads, which breaks the single-cycle contract.
-- **`riscv-tests` not yet run.** The self-test in `sw/test.S` is hand-written
-  and covers every instruction, but it is not the official compliance suite.
+If the memory initialization file is missing or unreadable, Vivado prints an informational message reading roughly "could not open file, ignoring" and **synthesis completes successfully.** No error, no warning. The ROM is silently zero-filled, the CPU fetches all zeros, and the design does nothing.
+
+The build looked clean. The board did nothing. This was only found by reading the full message log on a run that had already reported success.
+
+Two related traps:
+
+- **Memory files must use the `.mem` extension.** Vivado's Add Sources dialog filters by extension and will not display `.hex` files at all, even though `$readmemh` itself does not care about the name.
+- **Never run Vivado inside a cloud-synced folder.** OneDrive locks `.cache` files mid-write and corrupts the project. Use a local path such as `C:\fpga`.
+
+### Scoping the instruction set
+
+Covered above. Working backwards from "must run gcc output" rather than forwards from a tutorial changed the entire scope of the project, and it is the decision I would defend first.
 
 ---
 
-## References
+## Next
 
-- Harris & Harris, *Digital Design and Computer Architecture, RISC-V Edition*
-- Patterson & Hennessy, *Computer Organization and Design, RISC-V Edition*
-- *The RISC-V Instruction Set Manual, Volume I: Unprivileged ISA*
+- 5-stage pipeline (IF/ID/EX/MEM/WB) with forwarding and load-use stalls, benchmarked against this 65 MHz single-cycle baseline
+- Scan chain insertion and a MISR BIST controller on the existing core
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See `LICENSE`.
